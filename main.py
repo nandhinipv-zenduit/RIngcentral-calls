@@ -27,9 +27,9 @@ from datetime import datetime, timedelta, timezone
 # ==============================================================
 
 # RingCentral — env vars preferred; fallback to hardcode for local dev
-RC_CLIENT_ID     = os.environ.get("RC_CLIENT_ID")
-RC_CLIENT_SECRET = os.environ.get("RC_CLIENT_SECRET")
-RC_REFRESH_TOKEN = os.environ.get("RC_REFRESH_TOKEN")
+RC_CLIENT_ID     = os.environ.get("RC_CLIENT_ID",     "7aeCcBVuaDIeaZV6qmsR6y")
+RC_CLIENT_SECRET = os.environ.get("RC_CLIENT_SECRET", "dalRA48Iu8Mf25XcAATc7Zf55BcC0k7XueWCULOHzaYW")
+RC_REFRESH_TOKEN = os.environ.get("RC_REFRESH_TOKEN", "U0pDMDFQMjNQQVMwMHxBQUMwNHpSaWVMNUZBcjFPYjRjeVJBTXlRaktFR2tNcXpSVFdGb3RlTE1sT19rRjkyRWM3a3ZmMUdydjM5WVo0STVKWHJLYmk2STJzcjhyVGNOMUdjWGxuYm5keURjZ2ljeUtvZHdpQ1E0cGRqZW1SM0xrNW4xcHJKOWVXbm5DSktqdmxnOG1yTGhiQ1RzamZzbEpPekQycG1GdzRwUnhtbHlBZnJXd1liM1dqU1RqazZDSVZfOVA0OWcxaExNYjdUV2pIaGRmcFRjY3ljc1FId1RmQjliS2ZLbm5EdHd8QjV6NXhBfEpKNG50Tkx4MkRvaFZTTElwSFpzVkF8QVF8QUF8QUFBQUFINzd2dUE")
 
 RC_BASE_URL = "https://platform.ringcentral.com"
 
@@ -46,7 +46,7 @@ ZOHO_ACCOUNTS_URL  = "https://accounts.zoho.com"
 ZOHO_API_DOMAIN    = "https://analyticsapi.zoho.com/restapi/v2"
 ZOHO_ORG_ID        = "67409019"
 ZOHO_WORKSPACE_ID  = "953790000013364003"
-ZOHO_VIEW_ID       = "953790000055404002"   # RC Calls table
+ZOHO_VIEW_ID       = "953790000024630002"   # RC Calls table
 
 ZOHO_MAX_BYTES     = 14 * 1024 * 1024       # 14 MB per chunk
 
@@ -56,6 +56,75 @@ ZOHO_MAX_BYTES     = 14 * 1024 * 1024       # 14 MB per chunk
 
 _rc_access_token: str | None = None
 _rc_refresh_token: str = RC_REFRESH_TOKEN
+
+
+# ==============================================================
+# GITHUB SECRET AUTO-UPDATE
+# ==============================================================
+
+def _update_github_secret(secret_name: str, secret_value: str):
+    """
+    Updates a GitHub Actions secret via the API so the RC refresh token
+    is always current — prevents weekly expiry failures in CI.
+    Requires GH_TOKEN and GH_REPO secrets set in the repository.
+    Silently skips if not running in GitHub Actions or missing credentials.
+    """
+    if os.environ.get("GITHUB_ACTIONS") != "true":
+        return
+
+    gh_token = os.environ.get("GH_TOKEN")
+    gh_repo  = os.environ.get("GH_REPO")   # format: owner/repo
+
+    if not gh_token or not gh_repo:
+        print(f"[github] GH_TOKEN or GH_REPO not set — skipping secret update")
+        return
+
+    try:
+        from base64 import b64encode
+        # Step 1: get repo public key for secret encryption
+        key_res = requests.get(
+            f"https://api.github.com/repos/{gh_repo}/actions/secrets/public-key",
+            headers={
+                "Authorization": f"Bearer {gh_token}",
+                "Accept":        "application/vnd.github+json",
+            },
+            timeout=10,
+        )
+        key_data   = key_res.json()
+        public_key = key_data["key"]
+        key_id     = key_data["key_id"]
+
+        # Step 2: encrypt using PyNaCl (installed in CI via requirements.txt)
+        try:
+            from nacl import encoding, public as nacl_public
+            pk      = nacl_public.PublicKey(public_key.encode(), encoding.Base64Encoder)
+            box     = nacl_public.SealedBox(pk)
+            encrypted = b64encode(box.encrypt(secret_value.encode())).decode()
+        except ImportError:
+            print("[github] PyNaCl not installed — add PyNaCl to requirements.txt")
+            return
+
+        # Step 3: push updated secret
+        put_res = requests.put(
+            f"https://api.github.com/repos/{gh_repo}/actions/secrets/{secret_name}",
+            headers={
+                "Authorization": f"Bearer {gh_token}",
+                "Accept":        "application/vnd.github+json",
+            },
+            json={
+                "encrypted_value": encrypted,
+                "key_id":          key_id,
+            },
+            timeout=10,
+        )
+
+        if put_res.status_code in (201, 204):
+            print(f"[github] ✅ Secret {secret_name} updated in GitHub")
+        else:
+            print(f"[github] ⚠ Secret update failed: {put_res.status_code} {put_res.text[:200]}")
+
+    except Exception as e:
+        print(f"[github] Secret update error (non-fatal): {e}")
 
 
 def rc_refresh() -> str:
@@ -86,10 +155,8 @@ def rc_refresh() -> str:
     _rc_access_token  = data["access_token"]
     _rc_refresh_token = data.get("refresh_token", _rc_refresh_token)
 
-    # NEW: persist rotated refresh token for CI to pick up
-    if os.environ.get("GITHUB_ACTIONS") == "true":
-        with open("new_rc_refresh_token.txt", "w") as f:
-            f.write(_rc_refresh_token)
+    # Auto-update GitHub Secret so token never expires in CI
+    _update_github_secret("RC_REFRESH_TOKEN", _rc_refresh_token)
 
     print(f"[RC auth] Token refreshed OK")
     return _rc_access_token
@@ -186,11 +253,10 @@ def get_user_map() -> dict[str, dict]:
                 "ext":        u.get("extensionNumber", ""),
                 "email":      u.get("contact", {}).get("email", ""),
                 "department": (
-                        u.get("contact", {}).get("department")
-                        or u.get("department")
-                        or (u.get("site") or {}).get("name")
-                        or u.get("jobTitle")
-                        or "No Group"
+                    u.get("department")
+                    or (u.get("site") or {}).get("name")
+                    or u.get("jobTitle")
+                    or "No Group"
                 ),
             }
 
