@@ -27,9 +27,9 @@ from datetime import datetime, timedelta, timezone
 # ==============================================================
 
 # RingCentral — env vars preferred; fallback to hardcode for local dev
-RC_CLIENT_ID     = os.environ.get("RC_CLIENT_ID",     "7aeCcBVuaDIeaZV6qmsR6y")
-RC_CLIENT_SECRET = os.environ.get("RC_CLIENT_SECRET", "dalRA48Iu8Mf25XcAATc7Zf55BcC0k7XueWCULOHzaYW")
-RC_REFRESH_TOKEN = os.environ.get("RC_REFRESH_TOKEN", "U0pDMDFQMjNQQVMwMHxBQUMwNHpSaWVMNUZBcjFPYjRjeVJBTXlRaktFR2tNcXpSVFdGb3RlTE1sT19rRjkyRWM3a3ZmMUdydjM5WVo0STVKWHJLYmk2STJzcjhyVGNOMUdjWGxuYm5keURjZ2ljeUtvZHdpQ1E0cGRqZW1SM0xrNW4xcHJKOWVXbm5DSktqdmxnOG1yTGhiQ1RzamZzbEpPekQycG1GdzRwUnhtbHlBZnJXd1liM1dqU1RqazZDSVZfOVA0OWcxaExNYjdUV2pIaGRmcFRjY3ljc1FId1RmQjliS2ZLbm5EdHd8QjV6NXhBfEpKNG50Tkx4MkRvaFZTTElwSFpzVkF8QVF8QUF8QUFBQUFINzd2dUE")
+RC_CLIENT_ID     = os.environ.get("RC_CLIENT_ID")
+RC_CLIENT_SECRET = os.environ.get("RC_CLIENT_SECRET")
+RC_REFRESH_TOKEN = os.environ.get("RC_REFRESH_TOKEN")
 
 RC_BASE_URL = "https://platform.ringcentral.com"
 
