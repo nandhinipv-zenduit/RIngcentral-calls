@@ -194,7 +194,7 @@ def get_user_map() -> dict[str, dict]:
                         or "No Group"
                 ),
             }
-            }
+            
 
         paging      = data.get("paging", {})
         total_pages = paging.get("totalPages", 1)
