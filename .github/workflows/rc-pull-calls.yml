@@ -1,0 +1,33 @@
+name: RC Pull Calls
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run rc_pull_calls.py
+        env:
+          RC_CLIENT_ID: ${{ secrets.RC_CLIENT_ID }}
+          RC_CLIENT_SECRET: ${{ secrets.RC_CLIENT_SECRET }}
+          RC_REFRESH_TOKEN: ${{ secrets.RC_REFRESH_TOKEN }}
+          ZOHO_CLIENT_ID_UNI: ${{ secrets.ZOHO_CLIENT_ID_UNI }}
+          ZOHO_CLIENT_SECRET_UNI: ${{ secrets.ZOHO_CLIENT_SECRET_UNI }}
+          ZOHO_REFRESH_TOKEN_UNI: ${{ secrets.ZOHO_REFRESH_TOKEN_UNI }}
+        run: python rc_pull_calls.py
