@@ -46,7 +46,7 @@ ZOHO_ACCOUNTS_URL  = "https://accounts.zoho.com"
 ZOHO_API_DOMAIN    = "https://analyticsapi.zoho.com/restapi/v2"
 ZOHO_ORG_ID        = "67409019"
 ZOHO_WORKSPACE_ID  = "953790000013364003"
-ZOHO_VIEW_ID       = "953790000024630002"   # RC Calls table
+ZOHO_VIEW_ID       = "953790000055404002"   # RC Calls table (Ringcentral calls)
 
 ZOHO_MAX_BYTES     = 14 * 1024 * 1024       # 14 MB per chunk
 
@@ -212,7 +212,10 @@ def get_user_map() -> dict[str, dict]:
 
 def fetch_daily_calls(date: datetime, user_map: dict) -> list[dict]:
     day_start = date.replace(hour=0,  minute=0,  second=0,  microsecond=0, tzinfo=timezone.utc)
-    day_end   = date.replace(hour=23, minute=59, second=59, microsecond=0, tzinfo=timezone.utc)
+    day_end   = min(
+        date.replace(hour=23, minute=59, second=59, microsecond=0, tzinfo=timezone.utc),
+        datetime.now(timezone.utc)
+    )
 
     body = {
         "grouping": {"groupBy": "Users"},
