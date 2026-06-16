@@ -86,6 +86,11 @@ def rc_refresh() -> str:
     _rc_access_token  = data["access_token"]
     _rc_refresh_token = data.get("refresh_token", _rc_refresh_token)
 
+    # NEW: persist rotated refresh token for CI to pick up
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        with open("new_rc_refresh_token.txt", "w") as f:
+            f.write(_rc_refresh_token)
+
     print(f"[RC auth] Token refreshed OK")
     return _rc_access_token
 
