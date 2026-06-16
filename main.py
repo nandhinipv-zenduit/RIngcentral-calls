@@ -187,11 +187,13 @@ def get_user_map() -> dict[str, dict]:
                 "ext":        u.get("extensionNumber", ""),
                 "email":      u.get("contact", {}).get("email", ""),
                 "department": (
-                    u.get("department")
-                    or (u.get("site") or {}).get("name")
-                    or u.get("jobTitle")
-                    or "No Group"
+                        u.get("contact", {}).get("department")
+                        or u.get("department")
+                        or (u.get("site") or {}).get("name")
+                        or u.get("jobTitle")
+                        or "No Group"
                 ),
+            }
             }
 
         paging      = data.get("paging", {})
