@@ -7,8 +7,8 @@ and uploads to Zoho Analytics (truncate + append pattern).
 Setup:
     pip install requests pandas
 
-Credentials pulled from environment variables (same pattern as zoho_auth.py).
-Set RC_REFRESH_TOKEN to your latest token after re-auth.
+Credentials pulled from environment variables.
+RC auth uses JWT flow — no refresh token needed.
 
 Usage (PyCharm — run directly, no CLI args needed):
     Just hit Run. Adjust START_DATE / END_DATE in CONFIG.
@@ -29,7 +29,8 @@ from datetime import datetime, timedelta, timezone
 # RingCentral — env vars preferred; fallback to hardcode for local dev
 RC_CLIENT_ID     = os.environ.get("RC_CLIENT_ID")
 RC_CLIENT_SECRET = os.environ.get("RC_CLIENT_SECRET")
-RC_JWT = os.environ.get("RC_JWT")
+RC_JWT_TOKEN     = os.environ.get("RC_JWT")           # Set this in GitHub Secrets / local env
+
 RC_BASE_URL = "https://platform.ringcentral.com"
 
 # Date range to pull
@@ -50,84 +51,21 @@ ZOHO_VIEW_ID       = "953790000024630002"   # RC Calls table
 ZOHO_MAX_BYTES     = 14 * 1024 * 1024       # 14 MB per chunk
 
 # ==============================================================
-# RINGCENTRAL AUTH
+# RINGCENTRAL AUTH — JWT FLOW
 # ==============================================================
 
 _rc_access_token: str | None = None
-_rc_refresh_token: str = RC_REFRESH_TOKEN
-
-
-# ==============================================================
-# GITHUB SECRET AUTO-UPDATE
-# ==============================================================
-
-def _update_github_secret(secret_name: str, secret_value: str):
-    """
-    Updates a GitHub Actions secret via the API so the RC refresh token
-    is always current — prevents weekly expiry failures in CI.
-    Requires GH_TOKEN and GH_REPO secrets set in the repository.
-    Silently skips if not running in GitHub Actions or missing credentials.
-    """
-    if os.environ.get("GITHUB_ACTIONS") != "true":
-        return
-
-    gh_token = os.environ.get("GH_TOKEN")
-    gh_repo  = os.environ.get("GH_REPO")   # format: owner/repo
-
-    if not gh_token or not gh_repo:
-        print(f"[github] GH_TOKEN or GH_REPO not set — skipping secret update")
-        return
-
-    try:
-        from base64 import b64encode
-        # Step 1: get repo public key for secret encryption
-        key_res = requests.get(
-            f"https://api.github.com/repos/{gh_repo}/actions/secrets/public-key",
-            headers={
-                "Authorization": f"Bearer {gh_token}",
-                "Accept":        "application/vnd.github+json",
-            },
-            timeout=10,
-        )
-        key_data   = key_res.json()
-        public_key = key_data["key"]
-        key_id     = key_data["key_id"]
-
-        # Step 2: encrypt using PyNaCl (installed in CI via requirements.txt)
-        try:
-            from nacl import encoding, public as nacl_public
-            pk      = nacl_public.PublicKey(public_key.encode(), encoding.Base64Encoder)
-            box     = nacl_public.SealedBox(pk)
-            encrypted = b64encode(box.encrypt(secret_value.encode())).decode()
-        except ImportError:
-            print("[github] PyNaCl not installed — add PyNaCl to requirements.txt")
-            return
-
-        # Step 3: push updated secret
-        put_res = requests.put(
-            f"https://api.github.com/repos/{gh_repo}/actions/secrets/{secret_name}",
-            headers={
-                "Authorization": f"Bearer {gh_token}",
-                "Accept":        "application/vnd.github+json",
-            },
-            json={
-                "encrypted_value": encrypted,
-                "key_id":          key_id,
-            },
-            timeout=10,
-        )
-
-        if put_res.status_code in (201, 204):
-            print(f"[github] ✅ Secret {secret_name} updated in GitHub")
-        else:
-            print(f"[github] ⚠ Secret update failed: {put_res.status_code} {put_res.text[:200]}")
-
-    except Exception as e:
-        print(f"[github] Secret update error (non-fatal): {e}")
 
 
 def rc_refresh() -> str:
-    global _rc_access_token, _rc_refresh_token
+    """Exchange JWT assertion for a fresh RC access token."""
+    global _rc_access_token
+
+    if not RC_JWT_TOKEN:
+        raise RuntimeError(
+            "RC_JWT env var is not set. "
+            "Create a JWT credential at developers.ringcentral.com and set RC_JWT."
+        )
 
     auth = base64.b64encode(
         f"{RC_CLIENT_ID}:{RC_CLIENT_SECRET}".encode()
@@ -140,8 +78,8 @@ def rc_refresh() -> str:
             "Content-Type":  "application/x-www-form-urlencoded",
         },
         data={
-            "grant_type":    "refresh_token",
-            "refresh_token": _rc_refresh_token,
+            "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+            "assertion":  RC_JWT_TOKEN,
         },
         timeout=30,
     )
@@ -149,15 +87,10 @@ def rc_refresh() -> str:
     data = res.json()
 
     if "access_token" not in data:
-        raise RuntimeError(f"RC token refresh failed: {json.dumps(data, indent=2)}")
+        raise RuntimeError(f"RC JWT auth failed: {json.dumps(data, indent=2)}")
 
-    _rc_access_token  = data["access_token"]
-    _rc_refresh_token = data.get("refresh_token", _rc_refresh_token)
-
-    # Auto-update GitHub Secret so token never expires in CI
-    _update_github_secret("RC_REFRESH_TOKEN", _rc_refresh_token)
-
-    print(f"[RC auth] Token refreshed OK")
+    _rc_access_token = data["access_token"]
+    print("[RC auth] Access token obtained via JWT ✅")
     return _rc_access_token
 
 
@@ -173,8 +106,8 @@ def rc_token() -> str:
 # ==============================================================
 
 def rc_get(path: str, params: dict | None = None) -> dict | None:
-    url   = f"{RC_BASE_URL}{path}"
-    wait  = 2
+    url  = f"{RC_BASE_URL}{path}"
+    wait = 2
 
     for attempt in range(5):
         res = requests.get(
@@ -186,6 +119,7 @@ def rc_get(path: str, params: dict | None = None) -> dict | None:
         if res.status_code == 200:
             return res.json()
         if res.status_code == 401:
+            print("[RC auth] 401 — refreshing token via JWT")
             rc_refresh()
             continue
         if res.status_code == 429:
@@ -213,6 +147,7 @@ def rc_post(path: str, body: dict) -> dict | None:
         if res.status_code == 200:
             return res.json()
         if res.status_code == 401:
+            print("[RC auth] 401 — refreshing token via JWT")
             rc_refresh()
             continue
         if res.status_code == 429:
@@ -296,14 +231,14 @@ def fetch_daily_calls(date: datetime, user_map: dict) -> list[dict]:
                 "callsByOrigin":   {"aggregationType": "Sum"},
             },
             "timers": {
-                "allCallsDuration":          {"aggregationType": "Sum"},
-                "callsDurationByDirection":  {"aggregationType": "Sum"},
+                "allCallsDuration":         {"aggregationType": "Sum"},
+                "callsDurationByDirection": {"aggregationType": "Sum"},
             },
         },
     }
 
-    result  = rc_post("/analytics/calls/v1/accounts/~/aggregation/fetch", body)
-    rows    = []
+    result = rc_post("/analytics/calls/v1/accounts/~/aggregation/fetch", body)
+    rows   = []
 
     if not result:
         return rows
@@ -316,11 +251,11 @@ def fetch_daily_calls(date: datetime, user_map: dict) -> list[dict]:
         counters = r.get("counters", {})
         timers   = r.get("timers", {})
 
-        user_info    = user_map.get(key, {})
-        name         = info.get("name")         or user_info.get("name",       "Unknown")
-        ext          = info.get("extensionNumber") or user_info.get("ext",     "")
-        dept         = user_info.get("department", "No Group")
-        email        = user_info.get("email",       "")
+        user_info = user_map.get(key, {})
+        name      = info.get("name")              or user_info.get("name",       "Unknown")
+        ext       = info.get("extensionNumber")   or user_info.get("ext",        "")
+        dept      = user_info.get("department",   "No Group")
+        email     = user_info.get("email",        "")
 
         all_calls    = (counters.get("allCalls")         or {}).get("values", 0)
         direction    = (counters.get("callsByDirection") or {}).get("values", {})
@@ -336,10 +271,10 @@ def fetch_daily_calls(date: datetime, user_map: dict) -> list[dict]:
         queue_calls  = origin_vals.get("queue",  0)
         direct_calls = origin_vals.get("direct", 0)
 
-        all_dur      = (timers.get("allCallsDuration")              or {}).get("values", 0)
-        in_dur       = ((timers.get("callsDurationByDirection")     or {}).get("values") or {}).get("inbound",  0)
-        out_dur      = ((timers.get("callsDurationByDirection")     or {}).get("values") or {}).get("outbound", 0)
-        avg_handle   = round(all_dur / all_calls, 1) if all_calls else 0
+        all_dur    = (timers.get("allCallsDuration")                           or {}).get("values", 0)
+        in_dur     = ((timers.get("callsDurationByDirection") or {}).get("values") or {}).get("inbound",  0)
+        out_dur    = ((timers.get("callsDurationByDirection") or {}).get("values") or {}).get("outbound", 0)
+        avg_handle = round(all_dur / all_calls, 1) if all_calls else 0
 
         rows.append({
             "date":               day_start.strftime("%Y-%m-%d"),
@@ -437,7 +372,7 @@ def _zoho_import_chunk(csv_bytes: bytes, import_type: str, access_token: str):
     res = requests.post(
         url,
         headers={
-            "Authorization":  f"Zoho-oauthtoken {access_token}",
+            "Authorization":    f"Zoho-oauthtoken {access_token}",
             "ZANALYTICS-ORGID": ZOHO_ORG_ID,
         },
         data={
@@ -468,13 +403,12 @@ def zoho_upload(df: pd.DataFrame, access_token: str):
         print("[Zoho] Empty DataFrame — skipping upload.")
         return
 
-    # format date back to string for CSV
     df = df.copy()
     df["date"] = df["date"].dt.strftime("%Y-%m-%d")
 
-    header_bytes  = len(df.iloc[0:0].to_csv(index=False).encode("utf-8"))
-    full_bytes    = len(df.to_csv(index=False).encode("utf-8"))
-    avg_row       = max(1, (full_bytes - header_bytes) // max(1, len(df)))
+    header_bytes   = len(df.iloc[0:0].to_csv(index=False).encode("utf-8"))
+    full_bytes     = len(df.to_csv(index=False).encode("utf-8"))
+    avg_row        = max(1, (full_bytes - header_bytes) // max(1, len(df)))
     rows_per_chunk = max(1, (ZOHO_MAX_BYTES - header_bytes) // avg_row)
 
     total = len(df)
@@ -501,7 +435,7 @@ def main():
     print(f"Range: {START_DATE.date()} → {END_DATE.date()}")
     print("=" * 60)
 
-    # ── Step 1: RC auth
+    # ── Step 1: RC auth via JWT
     rc_refresh()
 
     # ── Step 2: User directory
