@@ -30,4 +30,4 @@ jobs:
           ZOHO_CLIENT_ID_UNI: ${{ secrets.ZOHO_CLIENT_ID_UNI }}
           ZOHO_CLIENT_SECRET_UNI: ${{ secrets.ZOHO_CLIENT_SECRET_UNI }}
           ZOHO_REFRESH_TOKEN_UNI: ${{ secrets.ZOHO_REFRESH_TOKEN_UNI }}
-        run: python rc_pull_calls.py
+        run: python main.py
