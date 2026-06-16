@@ -25,15 +25,3 @@ jobs:
           ZOHO_CLIENT_SECRET_UNI: ${{ secrets.ZOHO_CLIENT_SECRET_UNI }}
           ZOHO_REFRESH_TOKEN_UNI: ${{ secrets.ZOHO_REFRESH_TOKEN_UNI }}
         run: python main.py
-      - name: Persist rotated RC refresh token
-        if: always()
-        run: |
-          if [ -f new_rc_refresh_token.txt ]; then
-            NEW_TOKEN=$(cat new_rc_refresh_token.txt)
-            gh secret set RC_REFRESH_TOKEN --body "$NEW_TOKEN" --repo ${{ github.repository }}
-            echo "RC_REFRESH_TOKEN updated."
-          else
-            echo "No new_rc_refresh_token.txt found — skipping secret update."
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
